@@ -11,77 +11,82 @@ from mirascope.core import openai # Use specific provider module
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import matplotlib.pyplot as plt
+import numpy as np # Import numpy for range
 
 load_dotenv() # Load API keys and SMTP config from .env
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Pydantic Model for Structured LLM Output ---
+# --- Pydantic Model for Structured LLM Output (Simplified) ---
 class EmailContent(BaseModel):
-    subject: str = Field(..., description="A concise and informative email subject line.")
+    subject: str = Field(..., description="A concise and informative email subject line including the [Current Date] placeholder.")
     body: str = Field(..., description="The main email body formatted in Markdown, including all summaries.")
-    chart_data: Dict[str, Any] = Field(
-        default_factory=dict, 
-        description="Data for chart generation. Expected format: {'summary_count': <integer>}"
-    )
+    # chart_data field removed
 
-# --- LLM Call for Email Composition ---
-# Update signature to accept raw_summaries_string: str
+# --- LLM Call for Email Composition (Simplified) ---
 @openai.call(model="gpt-4o-mini", response_model=EmailContent)
-async def compose_email(raw_summaries_string: str) -> EmailContent:
+async def compose_email(summaries: List[str]) -> EmailContent:
     """
     OBJECTIVE: Compose a mission-brief style email summarizing the provided intelligence summaries.
 
-    INPUT SUMMARIES (as a string potentially representing a Python list):
-    The following string contains multiple summaries, likely formatted as a Python list of strings.
-    Each element represents a topic cluster with bullet points (using \n for newlines).
-    You need to parse/interpret this string to extract the individual summaries.
+    INPUT SUMMARIES (as a Python list of strings):
+    The input is a list where each string element represents a topic cluster summary 
+    containing multiple bullet points (using \n for newlines).
     ```
-    {raw_summaries_string}
+    {summaries}
     ```
 
     TASK:
-    1. Interpret the input string to identify each distinct summary cluster.
+    1. Review the provided list of summary strings.
     2. Create a concise overall subject line (e.g., "Daily Recon Briefing - [Current Date]"). Ensure you include the exact placeholder "[Current Date]".
     3. Write an engaging email body in Markdown format:
         - Start with a brief intro (e.g., "Good morning, here is today's intelligence briefing:").
-        - For each distinct summary identified from the input string, format it clearly in the email body, perhaps with a heading like "Topic Cluster X:".
+        - For each summary string in the input list, format it clearly in the email body, perhaps with a heading like "Topic Cluster X:".
         - Add a brief concluding sentence.
-    4. Count the total number of distinct summary clusters you identified from the input string.
-    5. Return the subject (containing the '[Current Date]' placeholder), body, and chart data (containing the summary count) 
-       according to the `EmailContent` Pydantic model.
-       Example chart_data: {{"summary_count": 3}}
+    4. Return ONLY the subject (containing the '[Current Date]' placeholder) and body,
+       strictly conforming to the simplified `EmailContent` Pydantic model.
     """
     pass # Decorator handles the implementation
 
 
 # --- Chart Generation ---
-def generate_chart(chart_data: Dict[str, Any], output_path: str = "recon_chart.png") -> Optional[str]:
-    """Generates a simple bar chart and saves it."""
-    summary_count = chart_data.get("summary_count", 0)
-    if not isinstance(summary_count, int) or summary_count <= 0:
-        logging.warning(f"Invalid or missing 'summary_count' in chart_data: {chart_data}. Skipping chart.")
+def generate_chart(cluster_sizes: List[int], output_path: str = "recon_chart.png") -> Optional[str]:
+    """Generates a scatter plot of headlines per cluster and saves it."""
+    if not cluster_sizes or not isinstance(cluster_sizes, list) or not all(isinstance(size, int) and size >= 0 for size in cluster_sizes):
+        logging.warning(f"Invalid cluster_sizes data received: {cluster_sizes}. Skipping chart.")
         return None
     
-    logging.info(f"Generating chart for {summary_count} summary clusters...")
+    num_clusters = len(cluster_sizes)
+    cluster_indices = np.arange(1, num_clusters + 1) # X-axis: 1, 2, 3...
+    headline_counts = np.array(cluster_sizes)         # Y-axis: Counts per cluster
+
+    logging.info(f"Generating scatter plot for {num_clusters} clusters with sizes: {headline_counts}...")
+    
     try:
-        fig, ax = plt.subplots()
-        # Simple chart: bar showing the number of clusters/summaries
-        ax.bar(["Summary Clusters"], [summary_count]) 
-        ax.set_ylabel("Count")
-        ax.set_title("Recon Briefing: Summary Volume")
-        # Ensure y-axis starts at 0 and has integer ticks if count is small
+        fig, ax = plt.subplots(figsize=(max(6, num_clusters * 0.5), 5)) # Adjust width based on cluster count
+        ax.scatter(cluster_indices, headline_counts, s=100) # Use scatter plot, s is marker size
+        
+        ax.set_xlabel("Cluster Index")
+        ax.set_ylabel("Number of Headlines")
+        ax.set_title("Recon Briefing: Headlines per Cluster")
+        
+        # Ensure x-axis shows integer ticks for each cluster index
+        ax.set_xticks(cluster_indices)
+        ax.set_xlim(0.5, num_clusters + 0.5)
+        
+        # Ensure y-axis starts at 0 and shows integer ticks if max count is small
         ax.set_ylim(bottom=0)
-        if summary_count <= 10:
+        if headline_counts.max() <= 10:
              ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
 
+        plt.grid(True, axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
         plt.savefig(output_path)
-        plt.close(fig) # Close the plot to free memory
-        logging.info(f"Chart saved to {output_path}")
+        plt.close(fig) 
+        logging.info(f"Scatter plot saved to {output_path}")
         return output_path
     except Exception as e:
-        logging.error(f"Failed to generate chart: {e}")
+        logging.error(f"Failed to generate scatter plot: {e}", exc_info=True)
         return None
 
 # --- Email Sending ---
@@ -98,7 +103,6 @@ def send_email(subject: str, body_html: str, chart_path: Optional[str]):
         print("\n--- Email Content ---")
         print(f"Subject: {subject}")
         print("\n--- Body ---")
-        # Basic conversion from Markdown (or just print the raw string from LLM)
         print(body_html) 
         if chart_path:
              print(f"\n(Chart generated at: {chart_path})")
@@ -115,30 +119,23 @@ def send_email(subject: str, body_html: str, chart_path: Optional[str]):
     msg['From'] = smtp_user
     msg['To'] = ", ".join(recipient_emails)
 
-    # Attach HTML body
-    # Assume LLM returns Markdown; basic conversion or send as plain text if needed
-    # For simplicity, we'll embed the Markdown directly as HTML body content
-    # A proper solution might use a Markdown-to-HTML library
-    msg.attach(MIMEText(body_html.replace("\n", "<br>"), 'html')) # Simple newline->br conversion
+    msg.attach(MIMEText(body_html.replace("\n", "<br>"), 'html'))
 
-    # Attach chart image
     if chart_path and os.path.exists(chart_path):
         logging.info(f"Attaching chart image: {chart_path}")
         try:
             with open(chart_path, 'rb') as fp:
                 img = MIMEImage(fp.read())
-            img.add_header('Content-ID', '<recon_chart>') # Referenced in HTML if needed
+            img.add_header('Content-ID', '<recon_chart>') 
             img.add_header('Content-Disposition', 'inline', filename=os.path.basename(chart_path))
             msg.attach(img)
         except Exception as e:
             logging.error(f"Error attaching chart image {chart_path}: {e}")
-            # Optionally add a note about the missing chart to the body
 
-    # Send the email
     try:
         logging.info(f"Connecting to SMTP server {smtp_server}:{smtp_port}")
         with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls() # Enable security
+            server.starttls() 
             server.login(smtp_user, smtp_password)
             logging.info(f"Sending email to {', '.join(recipient_emails)}")
             server.sendmail(smtp_user, recipient_emails, msg.as_string())
@@ -149,20 +146,16 @@ def send_email(subject: str, body_html: str, chart_path: Optional[str]):
 
 # Example usage for standalone testing
 async def main():
-    # Simulate the raw string output from Analyst
-    # Note: Ensure quotes within the string are handled if testing complex cases
-    sample_raw_summaries_string = '''[
-        "- Market reached a new record high today.\n- Tech stocks led the surge.\n- Economic optimism fueled the rally.",
-        "- A new AI chip was announced, promising significant performance gains."
-    ]'''
-    logging.info("Commander composing email from sample raw string...")
+    # Use a list of strings for testing now
+    sample_summaries = [
+        "- Summary 1, point 1\n- Summary 1, point 2",
+        "- Summary 2, point A\n- Summary 2, point B"
+    ]
+    logging.info("Commander composing email from sample summaries list...")
     try:
-        # Call returns a response object
-        from mirascope.core.openai import OpenAICallResponse
-        commander_response: OpenAICallResponse = await compose_email(sample_raw_summaries_string)
-        email_content: EmailContent = commander_response.content # Extract the Pydantic model
+        # Since response_model is used, the awaited result *is* the model instance
+        email_content: EmailContent = await compose_email(sample_summaries)
 
-        # Validate the extracted content
         if not isinstance(email_content, EmailContent):
             logging.error(f"Commander test did not return valid EmailContent object (received type: {type(email_content)}). Content: {email_content!r}.")
             return
@@ -170,7 +163,6 @@ async def main():
         print("\n--- Generated Email Content (from LLM) ---")
         print(f"Subject: {email_content.subject}")
         print(f"Body:\n{email_content.body}")
-        print(f"Chart Data: {email_content.chart_data}")
 
         # Post-process subject for date (Example for testing)
         from datetime import date
@@ -178,15 +170,12 @@ async def main():
         final_subject = email_content.subject.replace("[Current Date]", today_str)
         print(f"Final Subject: {final_subject}")
 
-        chart_file = generate_chart(email_content.chart_data)
-        send_email(final_subject, email_content.body, chart_file)
+        # Manually create chart data for testing chart generation
+        test_cluster_sizes = [5, 3] # Example sizes matching sample_summaries length
+        print(f"Test Cluster Sizes: {test_cluster_sizes}")
+        chart_file = generate_chart(test_cluster_sizes)
 
-        if chart_file and os.path.exists(chart_file):
-             try:
-                 os.remove(chart_file)
-                 logging.info(f"Cleaned up chart file: {chart_file}")
-             except OSError as e:
-                  logging.warning(f"Could not remove chart file {chart_file}: {e}")
+        send_email(final_subject, email_content.body, chart_file)
 
     except Exception as e:
         logging.error(f"Error during email composition or sending: {e}", exc_info=True)

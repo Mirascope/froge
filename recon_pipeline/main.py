@@ -2,19 +2,20 @@
 import asyncio
 import logging
 import os
-import ast # Import the ast module for literal_eval
+# import ast # No longer needed
 from datetime import date # Import date
 from typing import List
 
 from scout import fetch_headlines, Headline
-from analyst import summarize_headlines
+# Update analyst import to include the Pydantic model
+from analyst import summarize_headlines, AnalystOutput
 from commander import compose_email, generate_chart, send_email, EmailContent
 
-# Import the response type for checking
-from mirascope.core.openai import OpenAICallResponse 
+# Import the response type for checking - only needed if NOT using response_model
+# from mirascope.core.openai import OpenAICallResponse
 
-# Set logging level to DEBUG to see more details
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# Set logging level back to INFO for cleaner output, or keep DEBUG if needed
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Define news sources (replace with your desired RSS feeds)
 NEWS_SOURCES = {
@@ -47,40 +48,45 @@ async def run_pipeline():
         f"Source: {h.source}; Title: {h.title}; URL: {h.url}" + (f"; Summary: {h.summary}" if h.summary else "")
         for h in all_headlines
     )
-    logging.debug(f"Formatted headlines for Analyst:\n{headlines_text}")
+    logging.debug(f"Formatted headlines for Analyst:\n{headlines_text}") # Keep DEBUG or change level
 
-    # --- Analyst Phase ---
+    # --- Analyst Phase (Using response_model) --- 
     logging.info("Sending headlines to Analyst for summarization...")
-    raw_content_from_analyst = None # Initialize
+    summaries = None  # Initialize
+    cluster_sizes = None # Initialize
     try:
-        analyst_response: OpenAICallResponse = await summarize_headlines(headlines_text)
-        raw_content_from_analyst = analyst_response.content # Extract the raw content (likely a string)
+        # The awaited call now directly returns the Pydantic model instance
+        analysis_result: AnalystOutput = await summarize_headlines(headlines_text)
         
-        logging.debug(f"Analyst raw response content type: {type(raw_content_from_analyst)}")
-        logging.debug(f"Analyst raw response content value: {raw_content_from_analyst!r}")
-
-        if not raw_content_from_analyst or not isinstance(raw_content_from_analyst, str):
-            logging.warning(f"Analyst did not return a non-empty string (received type: {type(raw_content_from_analyst)}). Content: {raw_content_from_analyst!r}. Cannot proceed.")
-            return
-            
-        logging.info(f"Analyst returned raw content successfully.")
+        # Validate and extract the summaries list and cluster sizes
+        if not isinstance(analysis_result, AnalystOutput) or \
+           not analysis_result.summaries or \
+           not analysis_result.cluster_sizes or \
+           len(analysis_result.summaries) != len(analysis_result.cluster_sizes):
+             logging.warning(f"Analyst did not return a valid AnalystOutput object with matching summaries and cluster_sizes. Received: {analysis_result!r}. Cannot proceed.")
+             return
+        
+        summaries = analysis_result.summaries # Assign the list of strings
+        cluster_sizes = analysis_result.cluster_sizes # Assign the list of ints
+        logging.info(f"Analyst processing complete. Found {len(summaries)} summary clusters with sizes: {cluster_sizes}")
         
     except Exception as e:
         logging.error(f"Analyst phase failed unexpectedly: {e}", exc_info=True) 
         return
 
+    # Ensure we have summaries and sizes before proceeding
+    if summaries is None or cluster_sizes is None:
+        logging.error("Summaries or cluster_sizes variable is None after Analyst phase. Cannot proceed.")
+        return
+
     # --- Commander Phase ---
-    logging.info("Sending raw analyst output string to Commander for email composition...")
+    # Pass the PARSED summaries list to the commander
+    logging.info("Sending summaries list to Commander for email composition...")
     try:
-        # Pass the raw string content here.
-        # Since compose_email uses response_model=EmailContent, the awaited result
-        # IS the EmailContent object directly (or raises error on parse failure).
-        email_content: EmailContent = await compose_email(raw_content_from_analyst)
+        # Pass the actual list of summary strings now
+        email_content: EmailContent = await compose_email(summaries)
         
-        # Validate the type of the direct result.
         if not isinstance(email_content, EmailContent):
-            # This case might indicate an unexpected return type or LLM failure 
-            # that didn't conform to the Pydantic model despite the response_model hint.
             logging.error(f"Commander call did not return an EmailContent object as expected (received type: {type(email_content)}). Content: {email_content!r}. Cannot proceed.")
             return
             
@@ -92,21 +98,16 @@ async def run_pipeline():
         logging.info(f"Final email subject: {final_subject}")
         # --------------------------------------------
 
-        chart_file = generate_chart(email_content.chart_data)
-        
+        # --- Generate Chart Data & Chart --- 
+        # Pass the cluster_sizes list directly to generate_chart
+        logging.info(f"Generating chart with cluster sizes: {cluster_sizes}")
+        chart_file = generate_chart(cluster_sizes)
+        # -----------------------------------
+
         # Use the final subject with the date included
         send_email(final_subject, email_content.body, chart_file)
 
-        if chart_file and os.path.exists(chart_file):
-             try:
-                 os.remove(chart_file)
-                 logging.info(f"Cleaned up chart file: {chart_file}")
-             except OSError as e:
-                  logging.warning(f"Could not remove chart file {chart_file}: {e}")
-
     except Exception as e:
-        # This will catch errors during the compose_email call (like parsing failures)
-        # or errors during chart generation/sending.
         logging.error(f"Commander phase failed: {e}", exc_info=True) 
         return
 

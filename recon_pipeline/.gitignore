@@ -1,0 +1,16 @@
+# Matplotlib chart output
+recon_chart.png
+
+# Python virtual environment
+venv/
+
+# Environment variables
+.env
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VSCode settings
+.vscode/ 

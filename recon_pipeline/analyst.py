@@ -4,42 +4,40 @@ import logging
 from typing import List
 from mirascope.core import openai  # Use specific provider module
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field # Import Pydantic components
 
 load_dotenv() # Load OPENAI_API_KEY from .env file
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Use Mirascope V1 decorator API for the LLM call
-@openai.call(model="gpt-4o-mini")
-async def summarize_headlines(headlines_text: str) -> List[str]:
+# Define a Pydantic model for the analyst's structured output
+class AnalystOutput(BaseModel):
+    summaries: List[str] = Field(..., description="A list of concise summaries (3-5 bullet points each, formatted as single strings with \n for newlines) for distinct news topic clusters.")
+    cluster_sizes: List[int] = Field(..., description="A list of integers representing the number of original headlines grouped into each corresponding summary cluster.")
+
+# Use Mirascope V1 decorator API with the response_model
+@openai.call(model="gpt-4o-mini", response_model=AnalystOutput)
+async def summarize_headlines(headlines_text: str) -> AnalystOutput:
     """
-    OBJECTIVE: Deduplicate and cluster the provided news headlines, then generate 
-               a concise 3-5 bullet point summary for each distinct cluster/topic.
+    OBJECTIVE: Deduplicate and cluster the provided news headlines. For each distinct cluster/topic, 
+               count the number of original headlines in that cluster and generate a concise 
+               3-5 bullet point summary.
 
     INPUT HEADLINES:
     {headlines_text}
 
-    OUTPUT FORMAT:
-    Return ONLY a single, valid Python list literal containing strings. 
-    Each string ELEMENT in the list should represent ONE topic cluster and contain 
-    the complete 3-5 bullet point summary for that cluster AS A SINGLE MULTILINE STRING 
-    (using '\n' for newlines between bullets).
-    
-    IMPORTANT:
-    - Do NOT return a list of lists. Each element in the main list must be a string.
-    - Do NOT include markdown fences (like ```python) or any text before or after the list literal.
-    - Start the output directly with '[' and end it directly with ']'.
-    
-    Correct Example Output Structure:
-    [
-      "- Cluster 1: Point 1\n- Cluster 1: Point 2\n- Cluster 1: Point 3", 
-      "- Cluster 2: Point A\n- Cluster 2: Point B",
-      "- Cluster 3: Info X\n- Cluster 3: Info Y\n- Cluster 3: Info Z"
-    ]
+    TASK:
+    1. Identify the distinct topic clusters in the input headlines.
+    2. For each cluster, count how many headlines belong to it.
+    3. For each cluster, generate a 3-5 bullet point summary (as a single string with \n newlines).
+    4. Extract these summaries and their corresponding headline counts into the structure defined by the `AnalystOutput` model.
+       Ensure the order of `summaries` matches the order of `cluster_sizes`. 
+       Example: If cluster 1 has 5 headlines and cluster 2 has 3, the output might look like:
+       `summaries`: ["- Summary for cluster 1...", "- Summary for cluster 2..."]
+       `cluster_sizes`: [5, 3]
     """
-    # The decorator handles the LLM call with the docstring as the prompt template
-    # and the function arguments (`headlines_text`) inserted.
-    # The return type annotation `-> List[str]` guides the LLM's output format.
+    # The decorator handles the LLM call, using the docstring as the prompt
+    # and automatically parsing the LLM response into the AnalystOutput model.
     pass # Decorator handles the implementation
 
 # Example usage for standalone testing
@@ -53,22 +51,24 @@ async def main():
     Title: Inflation Concerns Ease Slightly; Source: Bloomberg; URL: example.com/5
     Title: Market Rally Continues Unabated; Source: Reuters; URL: example.com/6
     """
-    logging.info("Analyst summarizing sample headlines...")
+    logging.info("Analyst summarizing sample headlines (using response_model)...")
     try:
-        # Call returns a response object, not the direct content
-        from mirascope.core.openai import OpenAICallResponse
-        analyst_response: OpenAICallResponse = await summarize_headlines(sample_headlines)
-        summaries: List[str] = analyst_response.content # Extract the list
+        # The awaited call now directly returns the Pydantic model instance
+        analysis_result: AnalystOutput = await summarize_headlines(sample_headlines)
 
-        print("\n--- Analyst Summaries ---")
-        if summaries and isinstance(summaries, list) and all(isinstance(s, str) for s in summaries):
-            # Check that it's a list and all elements are strings
-            for i, summary in enumerate(summaries):
-                print(f"Cluster {i+1} Summary:\n{summary}\n")
+        print("\n--- Analyst Summaries (from response_model) ---")
+        if analysis_result and isinstance(analysis_result, AnalystOutput) and analysis_result.summaries and analysis_result.cluster_sizes:
+            if len(analysis_result.summaries) == len(analysis_result.cluster_sizes):
+                for i, (summary, size) in enumerate(zip(analysis_result.summaries, analysis_result.cluster_sizes)):
+                    print(f"Cluster {i+1} (Size: {size}) Summary:\n{summary}\n")
+            else:
+                print("Warning: Mismatch between number of summaries and cluster sizes reported.")
+                print(f"Summaries: {analysis_result.summaries}")
+                print(f"Cluster Sizes: {analysis_result.cluster_sizes}")
         else:
-            print(f"No valid list of strings generated. Received: {summaries}")
+            print(f"No valid AnalystOutput generated. Received: {analysis_result!r}")
     except Exception as e:
-        logging.error(f"Error during summarization: {e}")
+        logging.error(f"Error during summarization: {e}", exc_info=True)
 
 if __name__ == "__main__":
     asyncio.run(main()) 
