@@ -1,3 +1,5 @@
 """The army's tools."""
 
-__all__ = []
+from froge.froge.tools.calculator import Calculator, calculate
+
+__all__ = ['Calculator', 'calculate']
