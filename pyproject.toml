@@ -1,15 +1,7 @@
-[tool.poetry]
+[project]
 name = "froge"
-version = "0.0.0"
-description = ""
-authors = ["William Bakst <william@mirascope.io>"]
-license = "MIT"
+version = "0.0.1"
+description = "Build your own army of frogs."
 readme = "README.md"
-
-[tool.poetry.dependencies]
-python = ">=3.9,<4.0"
-
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires-python = ">=3.10"
+dependencies = ["mirascope[google,mistral]>=1.22.6"]
