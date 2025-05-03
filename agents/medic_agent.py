@@ -5,7 +5,7 @@ import time
 from typing import Any, List, Dict, Optional
 import collections
 
-from froge.agents.agent_base import BaseAgent, MonitoredAgentError, AgentNotHealedError
+from .agent_base import BaseAgent, MonitoredAgentError, AgentNotHealedError
 
 class MedicAgent:
     """

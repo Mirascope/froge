@@ -4,8 +4,8 @@ import random
 import logging
 from typing import Any, Optional, Union, Tuple
 
-from froge.agents.agent_base import BaseAgent, MonitoredAgentError
-from froge.froge.tools.calculator import calculate
+from .agent_base import BaseAgent, MonitoredAgentError
+from .calculator import calculate
 
 class CalculatorAgent(BaseAgent):
     """
